@@ -1,8 +1,6 @@
 services:
   awg-proxy:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/snarknn/awg-proxy:latest
     container_name: awg-proxy
     cap_add:
       - NET_ADMIN
