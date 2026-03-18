@@ -45,7 +45,7 @@ RUN apk add --no-cache bash ca-certificates iproute2 iptables procps tini \
     && update-ca-certificates \
     && mkdir -p /config /etc/amnezia/amneziawg /var/run/amneziawg /dev/net
 
-RUN printf '#!/usr/bin/env sh\ncat >/dev/null 2>/dev/null || true\nexit 0\n' > /usr/local/bin/resolvconf \
+RUN printf '#!/usr/bin/env sh\nfor arg in "$@"; do\n  case "$arg" in\n    -a) cat > /etc/resolv.conf; exit 0 ;;\n    -d) exit 0 ;;\n  esac\ndone\ncat >/dev/null 2>/dev/null\nexit 0\n' > /usr/local/bin/resolvconf \
     && chmod 0755 /usr/local/bin/resolvconf
 
 COPY --from=build-amneziawg-go /src/amneziawg-go /usr/local/bin/amneziawg-go

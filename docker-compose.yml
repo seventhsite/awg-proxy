@@ -9,7 +9,7 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
     ports:
-      - "${PROXY_PORT:-1080}:${PROXY_PORT:-1080}/tcp"
+      - "127.0.0.1:${PROXY_PORT:-1080}:${PROXY_PORT:-1080}/tcp"
     volumes:
       - ./amnezia.conf:/config/amnezia.conf:ro
     environment:

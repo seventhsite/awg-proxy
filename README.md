@@ -1,5 +1,7 @@
 # AWG Proxy (Portable Alpine)
 
+Russian version: [README.ru.md](README.ru.md)
+
 Containerized VPN gateway that establishes an AmneziaWG tunnel and exposes a SOCKS5 proxy.
 
 Traffic flow:
@@ -72,6 +74,14 @@ Supported environment variables:
 - `MICROSOCKS_QUIET` (`0` or `1`)
 - `MICROSOCKS_OPTS` (extra flags)
 
+DNS behavior:
+
+- `DNS = ...` from AWG config is applied to container resolver.
+- Runtime uses two layers for portability:
+  - `resolvconf` shim for `awg-quick` DNS hook.
+  - Explicit DNS apply step in `entrypoint.sh` after `awg-quick up`.
+- On Docker Desktop, AWG startup may take time (endpoint retries are normal), so check resolver state after startup logs finish.
+
 ## Notes about AWG config
 
 - File name must end with `.conf`.
@@ -85,18 +95,48 @@ Supported environment variables:
 - Windows Docker Desktop: expected to use userspace fallback (`amneziawg-go`).
 - Linux with kernel module installed: `awg-quick` may use kernel path first.
 
-## Current tested status
+## How to verify the container works
 
-Validated in this repository session:
+1. Check that the service is running:
 
-- `docker compose up --build -d` succeeds
-- Container is `Up` and port mapping is active
-- AWG interface is configured and proxy accepts outbound connections
-- Alpine image size: about `26.5MB`
+```powershell
+docker compose ps
+```
 
-Note on IP checks:
-- If direct and proxied external IP are identical, your host may already egress through the same provider/VPN path.
-- In that case rely on container logs (`client[...] connected to ...`) and AWG counters (`awg show`) to verify tunnel activity.
+Expected: service `awg-proxy` is `Up` and the proxy port is published.
+
+2. Check startup logs:
+
+```powershell
+docker compose logs --tail=120 awg-proxy
+```
+
+Expected: lines about bringing up AWG and starting `microsocks`.
+
+3. Test proxy egress with curl:
+
+```powershell
+curl.exe --socks5-hostname 127.0.0.1:1080 https://api.ipify.org
+```
+
+If your proxy port is custom, replace `1080` with `PROXY_PORT` value.
+
+4. Optional tunnel evidence from inside container:
+
+```powershell
+docker exec awg-proxy awg show
+```
+
+5. Verify DNS from AWG config is active inside container:
+
+```powershell
+docker exec awg-proxy cat /etc/resolv.conf
+docker exec awg-proxy nslookup google.com
+```
+
+Expected: `resolv.conf` contains `nameserver` entries from your AWG config (for example `1.1.1.1`) and `nslookup` reports one of those servers.
+
+If direct and proxied public IP are identical, your host may already use the same upstream route. In this case, rely on `awg show` counters and container logs to confirm traffic through the tunnel.
 
 ## Troubleshooting
 
@@ -112,6 +152,11 @@ Note on IP checks:
 
 - Proxy port busy
   - Override host/container port via `PROXY_PORT`.
+
+- Container still shows `nameserver 127.0.0.11`
+  - Wait until AWG startup completes (`docker compose logs --tail=120 awg-proxy`).
+  - Re-check `docker exec awg-proxy cat /etc/resolv.conf`.
+  - If needed, restart and wait longer (AWG may retry endpoint before finishing setup).
 
 ## Files
 

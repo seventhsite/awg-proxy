@@ -30,6 +30,27 @@ prepare_runtime_config() {
     chmod 600 "$runtime_awg_config"
 }
 
+apply_dns() {
+    local resolv_content
+    resolv_content="$(awk -F'[=,]' '
+        /^[[:space:]]*DNS[[:space:]]*=/ {
+            for (i = 2; i <= NF; i++) {
+                gsub(/[[:space:]]/, "", $i)
+                if ($i == "") continue
+                if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || $i ~ /:/)
+                    print "nameserver " $i
+                else
+                    print "search " $i
+            }
+        }
+    ' "$runtime_awg_config")"
+
+    [[ -z "$resolv_content" ]] && return 0
+
+    printf '%s\n' "$resolv_content" > /etc/resolv.conf
+    echo "[+] Applied DNS from config to /etc/resolv.conf"
+}
+
 cleanup() {
     local exit_code=$?
 
@@ -82,6 +103,8 @@ prepare_runtime_config
 
 echo "[+] Bringing up AmneziaWG interface: $interface_name"
 awg-quick up "$runtime_awg_config"
+
+apply_dns
 
 echo "[+] Current interface state"
 awg show "$interface_name" || true
