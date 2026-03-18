@@ -1,0 +1,36 @@
+services:
+  awg-proxy:
+    image: ghcr.io/snarknn/awg-proxy:latest
+    container_name: awg-proxy
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      net.ipv4.conf.all.src_valid_mark: "1"
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "127.0.0.1:${PROXY_PORT:-1080}:${PROXY_PORT:-1080}/tcp"
+    volumes:
+      - ./amnezia.conf:/config/amnezia.conf:ro
+    environment:
+      WG_QUICK_USERSPACE_IMPLEMENTATION: amneziawg-go
+      LOG_LEVEL: info
+      PROXY_LISTEN_HOST: 0.0.0.0
+      PROXY_PORT: ${PROXY_PORT:-1080}
+      # PROXY_USER: proxy
+      # PROXY_PASSWORD: change-me
+      # MICROSOCKS_WHITELIST: 192.168.1.0/24
+    restart: unless-stopped
+    networks:
+      macnet:
+        ipv4_address: 192.168.7.2   # можно указать статический IP
+
+networks:
+  macnet:
+    driver: macvlan
+    driver_opts:
+      parent: ens18   # интерфейс хоста, который подключен к вашей локальной сети
+    ipam:
+      config:
+        - subnet: 192.168.7.0/24
+          gateway: 192.168.7.1
