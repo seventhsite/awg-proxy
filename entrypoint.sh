@@ -51,6 +51,14 @@ apply_dns() {
     echo "[+] Applied DNS from config to /etc/resolv.conf"
 }
 
+apply_mtu() {
+    ip link set dev eth0 mtu 1400
+    ip link set dev amnezia mtu 1400
+    iptables -t mangle -A FORWARD -o amnezia -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1200
+    iptables -t mangle -A FORWARD -i amnezia -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1200
+    iptables -t nat -A POSTROUTING -o amnezia -j MASQUERADE
+}
+
 cleanup() {
     local exit_code=$?
 
@@ -105,6 +113,7 @@ echo "[+] Bringing up AmneziaWG interface: $interface_name"
 awg-quick up "$runtime_awg_config"
 
 apply_dns
+apply_mtu
 
 echo "[+] Current interface state"
 awg show "$interface_name" || true
