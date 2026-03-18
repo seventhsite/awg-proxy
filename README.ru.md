@@ -2,12 +2,19 @@
 
 English version: [README.md](README.md)
 
-Контейнеризованный VPN-шлюз, который поднимает туннель AmneziaWG и предоставляет SOCKS5-прокси.
+Контейнеризованный VPN-шлюз, который поднимает туннель AmneziaWG и поддерживает два режима работы:
 
-Поток трафика:
+1. **SOCKS5-прокси** — приложения подключаются через локальный SOCKS5-порт.
+2. **Сетевой шлюз (роутер)** — контейнер выступает шлюзом по умолчанию для других устройств в локальной сети, направляя весь их трафик через VPN-туннель.
+
+Поток трафика (режим SOCKS5):
 - Клиент -> SOCKS5-прокси (`microsocks`)
 - Процесс прокси -> сетевой стек контейнера
 - Политика маршрутизации контейнера -> AWG-туннель (`awg-quick` + userspace fallback через `amneziawg-go`)
+
+Поток трафика (режим шлюза):
+- Устройство в сети (шлюз по умолчанию = IP контейнера) -> сетевой стек контейнера
+- iptables NAT/MASQUERADE -> AWG-туннель
 
 Проект рассчитан на работу в Windows Docker Desktop и Linux.
 
@@ -29,7 +36,15 @@ English version: [README.md](README.md)
 
 ## Быстрый старт
 
-1. Поместите ваш AWG-конфиг в `amnezia.conf` в корне проекта.
+1. Скопируйте пример compose-файла и AWG-конфиг:
+
+```bash
+cp docker-compose.example.yml docker-compose.yml
+cp /path/to/your/amnezia.conf amnezia.conf
+```
+
+   Отредактируйте `docker-compose.yml` при необходимости (порты, сеть macvlan и т.д.).
+
 2. Запустите сервис:
 
 ```powershell
@@ -90,10 +105,78 @@ Compose публикует настраиваемый порт:
   - `::/0`
 - Пустые присваивания, например `I2 =`, очищаются во время запуска в `entrypoint.sh` и пишутся во временный конфиг.
 
+## Использование в качестве VPN-шлюза (режим роутера)
+
+Контейнер может выступать шлюзом по умолчанию для устройств в вашей локальной сети, направляя весь их трафик через VPN-туннель. Это удобно для устройств, которые не поддерживают SOCKS5 (телевизоры, приставки, IoT и т.д.).
+
+### Как это работает
+
+При запуске `entrypoint.sh` автоматически:
+- Устанавливает MTU 1400 на интерфейсах `eth0` и `amnezia`.
+- Ограничивает TCP MSS до 1200 для предотвращения фрагментации.
+- Включает iptables NAT (`MASQUERADE`) на туннельном интерфейсе.
+
+Дополнительных флагов не требуется — эти правила применяются при каждом запуске.
+
+### Настройка сети
+
+Чтобы контейнер был доступен как шлюз, используйте сеть macvlan — тогда контейнер получит собственный IP-адрес в вашей локальной сети.
+
+Пример compose-файла приведен в `docker-compose.example.yml`:
+
+```yaml
+services:
+  awg-proxy:
+    image: ghcr.io/snarknn/awg-proxy:latest
+    container_name: awg-proxy
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      net.ipv4.conf.all.src_valid_mark: "1"
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "127.0.0.1:${PROXY_PORT:-1080}:${PROXY_PORT:-1080}/tcp"
+    volumes:
+      - ./amnezia.conf:/config/amnezia.conf:ro
+    environment:
+      WG_QUICK_USERSPACE_IMPLEMENTATION: amneziawg-go
+      LOG_LEVEL: info
+      PROXY_LISTEN_HOST: 0.0.0.0
+      PROXY_PORT: ${PROXY_PORT:-1080}
+    restart: unless-stopped
+    networks:
+      macnet:
+        ipv4_address: 192.168.7.2
+
+networks:
+  macnet:
+    driver: macvlan
+    driver_opts:
+      parent: ens18        # интерфейс хоста, подключённый к локальной сети
+    ipam:
+      config:
+        - subnet: 192.168.7.0/24
+          gateway: 192.168.7.1
+```
+
+Подставьте свои значения для `parent`, `subnet`, `gateway` и `ipv4_address`.
+
+### Настройка клиентских устройств
+
+На каждом устройстве, трафик которого нужно направить через VPN, установите:
+
+- **Шлюз по умолчанию**: macvlan IP контейнера (например, `192.168.7.2`)
+- **DNS-сервер**: macvlan IP контейнера или DNS из вашего AWG-конфига
+
+После этого весь трафик устройства пойдёт через AWG-туннель.
+
+> **Примечание:** Режим шлюза требует Linux с Docker Engine. Сети macvlan не поддерживаются в Docker Desktop (Windows/macOS).
+
 ## Поведение на разных платформах
 
-- Windows Docker Desktop: ожидается userspace fallback через `amneziawg-go`.
-- Linux с установленным kernel-модулем: `awg-quick` может сначала использовать kernel-путь.
+- Windows Docker Desktop: ожидается userspace fallback через `amneziawg-go`. Только режим SOCKS5.
+- Linux с установленным kernel-модулем: `awg-quick` может сначала использовать kernel-путь. Доступны оба режима — SOCKS5 и шлюз.
 
 ## Как проверить, что контейнер работает
 
@@ -161,5 +244,8 @@ docker exec awg-proxy nslookup google.com
 ## Файлы
 
 - `Dockerfile` - multi-stage сборка portable-образа на Alpine
-- `entrypoint.sh` - запуск AWG и оркестрация прокси
-- `docker-compose.yml` - capabilities, проброс tun, переменные окружения по умолчанию
+- `entrypoint.sh` - запуск AWG, настройка NAT/маршрутизации и оркестрация прокси
+- `docker-compose.example.yml` - пример compose-файла (скопируйте в `docker-compose.yml` перед использованием)
+- `amnezia.conf.example` - пример AWG-конфига
+
+`docker-compose.yml` и `amnezia.conf` находятся в `.gitignore` — они содержат локальные настройки и не отслеживаются git.

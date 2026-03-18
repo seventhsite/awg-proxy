@@ -2,12 +2,19 @@
 
 Russian version: [README.ru.md](README.ru.md)
 
-Containerized VPN gateway that establishes an AmneziaWG tunnel and exposes a SOCKS5 proxy.
+Containerized VPN gateway that establishes an AmneziaWG tunnel and provides two modes of operation:
 
-Traffic flow:
+1. **SOCKS5 proxy** — applications connect through a local SOCKS5 port.
+2. **Network gateway (router)** — the container acts as a default gateway for other devices on your LAN, routing all their traffic through the VPN tunnel.
+
+Traffic flow (SOCKS5 mode):
 - Client -> SOCKS5 proxy (`microsocks`)
 - Proxy process -> container network stack
 - Container routing policy -> AWG tunnel (`awg-quick` + `amneziawg-go` userspace fallback)
+
+Traffic flow (gateway mode):
+- LAN device (default gateway = container IP) -> container network stack
+- iptables NAT/MASQUERADE -> AWG tunnel
 
 This project is designed to work on Windows Docker Desktop and Linux.
 
@@ -29,7 +36,15 @@ This project is designed to work on Windows Docker Desktop and Linux.
 
 ## Quick start
 
-1. Put your AWG config into `amnezia.conf` in project root.
+1. Copy the example compose file and AWG config:
+
+```bash
+cp docker-compose.example.yml docker-compose.yml
+cp /path/to/your/amnezia.conf amnezia.conf
+```
+
+   Edit `docker-compose.yml` if you need to change ports, add macvlan network, etc.
+
 2. Start service:
 
 ```powershell
@@ -90,10 +105,78 @@ DNS behavior:
   - `::/0`
 - Empty assignments like `I2 =` are sanitized at runtime by `entrypoint.sh` into a temporary config.
 
+## Using as a VPN gateway (router mode)
+
+The container can serve as a default gateway for devices on your local network, routing all their traffic through the VPN tunnel. This is useful when you want to route traffic from devices that do not support SOCKS5 (smart TVs, consoles, IoT, etc.).
+
+### How it works
+
+At startup `entrypoint.sh` automatically:
+- Sets MTU 1400 on `eth0` and `amnezia` interfaces.
+- Clamps TCP MSS to 1200 to prevent fragmentation.
+- Enables iptables NAT (`MASQUERADE`) on the tunnel interface.
+
+No extra flags needed — these rules are applied on every start.
+
+### Network setup
+
+To make the container reachable as a gateway, use a macvlan network so the container gets its own IP address on your LAN.
+
+An example compose file is provided in `docker-compose.example.yml`:
+
+```yaml
+services:
+  awg-proxy:
+    image: ghcr.io/snarknn/awg-proxy:latest
+    container_name: awg-proxy
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      net.ipv4.conf.all.src_valid_mark: "1"
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "127.0.0.1:${PROXY_PORT:-1080}:${PROXY_PORT:-1080}/tcp"
+    volumes:
+      - ./amnezia.conf:/config/amnezia.conf:ro
+    environment:
+      WG_QUICK_USERSPACE_IMPLEMENTATION: amneziawg-go
+      LOG_LEVEL: info
+      PROXY_LISTEN_HOST: 0.0.0.0
+      PROXY_PORT: ${PROXY_PORT:-1080}
+    restart: unless-stopped
+    networks:
+      macnet:
+        ipv4_address: 192.168.7.2
+
+networks:
+  macnet:
+    driver: macvlan
+    driver_opts:
+      parent: ens18        # host interface connected to your LAN
+    ipam:
+      config:
+        - subnet: 192.168.7.0/24
+          gateway: 192.168.7.1
+```
+
+Adjust `parent`, `subnet`, `gateway`, and `ipv4_address` to match your network.
+
+### Client configuration
+
+On any device you want to route through VPN, set:
+
+- **Default gateway**: the container's macvlan IP (e.g. `192.168.7.2`)
+- **DNS server**: the container's macvlan IP or the DNS from your AWG config
+
+After that all traffic from the device will flow through the AWG tunnel.
+
+> **Note:** Gateway mode requires Linux with Docker Engine. macvlan networks are not supported on Docker Desktop (Windows/macOS).
+
 ## Platform behavior
 
-- Windows Docker Desktop: expected to use userspace fallback (`amneziawg-go`).
-- Linux with kernel module installed: `awg-quick` may use kernel path first.
+- Windows Docker Desktop: expected to use userspace fallback (`amneziawg-go`). SOCKS5 mode only.
+- Linux with kernel module installed: `awg-quick` may use kernel path first. Both SOCKS5 and gateway modes are available.
 
 ## How to verify the container works
 
@@ -161,5 +244,8 @@ If direct and proxied public IP are identical, your host may already use the sam
 ## Files
 
 - `Dockerfile` - multi-stage Alpine portable build
-- `entrypoint.sh` - AWG startup and proxy orchestration
-- `docker-compose.yml` - capabilities, tun mapping, env defaults
+- `entrypoint.sh` - AWG startup, NAT/routing setup, and proxy orchestration
+- `docker-compose.example.yml` - example compose file (copy to `docker-compose.yml` before use)
+- `amnezia.conf.example` - example AWG config
+
+`docker-compose.yml` and `amnezia.conf` are in `.gitignore` — they contain local settings and are not tracked by git.

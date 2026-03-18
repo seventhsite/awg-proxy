@@ -2,11 +2,12 @@
 
 ## Project summary
 
-This repository contains a portable Dockerized AWG gateway with SOCKS5 proxy.
+This repository contains a portable Dockerized AWG gateway with SOCKS5 proxy and optional LAN gateway (router) mode.
 
 Main runtime path:
 - `entrypoint.sh` calls `awg-quick up` with mounted config (`/config/amnezia.conf`)
 - `entrypoint.sh` then applies DNS from AWG config to `/etc/resolv.conf` via `apply_dns()`
+- `entrypoint.sh` applies MTU and iptables NAT/MASQUERADE via `apply_mtu()` for gateway routing
 - If kernel AWG interface type is unavailable, `awg-quick` falls back to `amneziawg-go`
 - `microsocks` listens on all interfaces and serves SOCKS5 traffic
 
@@ -36,6 +37,15 @@ Main runtime path:
 4. Desktop sysctl tolerance
 - `awg-quick` is patched in image so `src_valid_mark` sysctl failure does not crash startup.
 
+5. Gateway routing (apply_mtu)
+- `entrypoint.sh` sets MTU 1400 on `eth0` and `amnezia`, clamps TCP MSS to 1200, and enables `MASQUERADE` on the tunnel interface.
+- These rules are always applied at startup; no extra flags needed.
+- For gateway mode, the container needs a macvlan network (see `docker-compose.example.yml`).
+
+6. Gitignored local files
+- `docker-compose.yml` and `amnezia.conf` are in `.gitignore`.
+- Users copy `docker-compose.example.yml` → `docker-compose.yml` before use.
+
 ## Operational defaults
 
 - Mounted config: `/config/amnezia.conf`
@@ -45,11 +55,12 @@ Main runtime path:
 ## Verification checklist (quick)
 
 1. Build and run:
+- `cp docker-compose.example.yml docker-compose.yml` (if not done yet)
 - `docker compose up --build -d`
 
 2. Container health:
 - `docker compose ps`
-- Status should be `Up` and expose `1081` by default.
+- Status should be `Up` and expose `1080` by default.
 
 3. Runtime logs:
 - `docker compose logs --tail=120 awg-proxy`
@@ -78,3 +89,5 @@ Note:
 - Preserve portable behavior unless user explicitly asks for Linux-only profile.
 - If introducing kernel-only optimization, implement as separate profile/target, not replacement.
 - Re-run compose startup and logs checks after changing Dockerfile or entrypoint.
+- Do not remove `apply_mtu()` rules — they are required for gateway mode.
+- `docker-compose.yml` is gitignored; always edit `docker-compose.example.yml` for tracked changes.
